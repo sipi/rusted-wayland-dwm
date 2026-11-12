@@ -110,11 +110,11 @@ Invariants (vérifiés par `Wm::check_invariants()` dans tous les tests) :
 
 | Famille | Fonctions |
 |---------|-----------|
-| Moniteurs | `add_monitor(name, screen) -> MonitorId`, `remove_monitor(id)`, `set_monitor_geometry(id, screen, usable)`, `monitor_at(x, y)` |
-| Clients | `manage(NewClient) -> ClientId`, `unmanage(id)`, `set_title`, `set_app_id`, `set_urgent`, `set_fullscreen`, `set_natural_size(id, w, h)`, `set_size_limits` |
+| Moniteurs | `add_monitor(name, screen) -> MonitorId`, `rename_monitor(id, name)`, `remove_monitor(id) -> bool` (refuse de retirer le dernier moniteur, qui continue d'héberger les clients), `set_monitor_geometry(id, screen, usable)`, `monitor_at(x, y)` |
+| Clients | `manage(NewClient) -> Option<ClientId>`, `unmanage(id)`, `set_title`, `set_app_id`, `set_urgent`, `set_fullscreen`, `set_natural_size(id, w, h) -> bool`, `set_size_limits`, `set_status` |
 | Actions | `apply(&Action) -> Vec<Effect>` |
 | Souris | `focus_client(id)`, `select_monitor(id)`, `mouse_move(id, x, y)`, `mouse_resize(id, w, h)`, `mouse_release(id)` |
-| Lecture | `is_visible(id)`, `selected()`, `render_order(mon) -> Vec<ClientId>`, `bar_view(mon) -> BarView`, `bar_rect(mon) -> Option<Rect>` |
+| Lecture | `config()`, `monitors()`, `monitor(id)`, `selected_monitor()`, `client(id)`, `client_ids()`, `is_visible(id)`, `selected()`, `status()`, `layout_symbol(mon)`, `stacking(mon) -> Stacking { tiled, floating, fullscreen }` (chaque liste de l'avant vers l'arrière), `bar_view(mon) -> Option<BarView>`, `bar_rect(mon) -> Option<Rect>`, `Client::inner()` (géométrie de la surface, bordure exclue), `check_invariants()` |
 
 `manage` reproduit `manage()` de dwm : application des règles, héritage du parent, `attach` en tête, `attachstack`, focus, `arrange`.
 `arrange(mon)` recalcule `geom` de chaque client tuilé visible selon la disposition courante.
@@ -147,32 +147,41 @@ Métriques, identiques à dwm : `bar_height = 16 + 2`, `lrpad = 16`, `TEXTW(s) =
 | Module | Contenu |
 |--------|---------|
 | `main.rs` | Ligne de commande, journalisation, choix du backend. |
-| `lib.rs` | Exporte l'API (nécessaire aux tests d'intégration). |
+| `lib.rs` | Exporte l'API (nécessaire aux tests d'intégration) ; réexporte le noyau sous `rwdwm::core`. |
 | `config.rs` | **La configuration** : `pub fn config() -> Config`. |
 | `state.rs` | `State` : état Smithay + `Wm` + table `ClientId → Window` ; `sync()`, `run_effects()`. |
-| `handlers/` | Un fichier par protocole : `compositor`, `xdg_shell`, `layer_shell`, `seat`, `selection`, `output`, `misc` (décoration, activation, viewporter, cursor-shape, dmabuf…). |
+| `handlers/` | Un fichier par famille de protocoles : `compositor` (+ shm), `xdg_shell` (+ décoration), `layer_shell`, `seat` (+ cursor-shape), `selection` (presse-papiers, sélection primaire, data-control), `output`, `misc` (activation, dmabuf, viewporter, single-pixel-buffer). |
 | `input.rs` | Traduction des événements d'entrée, recherche de raccourcis, modes déplacement/redimensionnement. |
 | `render.rs` | `output_elements()` : liste ordonnée des éléments de rendu d'une sortie ; générique sur le moteur. |
 | `cursor.rs` | Thème XCursor, flèche de repli. |
 | `status.rs` | Source `calloop` lisant stdin. |
 | `spawn.rs` | Lancement de processus détachés. |
+| `backend/mod.rs` | `BackendData`, `Options`, création de la boucle et de l'état (`create`), exécution (`run_loop`). |
 | `backend/{udev,winit,headless}.rs` | Backends. |
 
 ### 3.2 État global
 
 ```rust
+pub struct LoopData { pub state: State, pub display: Display<State> }   // donnée de la boucle calloop
+
 pub struct State {
     pub wm: Wm,                                   // noyau — source de vérité
-    pub windows: HashMap<ClientId, Window>,       // fenêtres gérées
-    pub unmapped: Vec<Window>,                    // toplevels avant leur premier commit
+    pub windows: HashMap<ClientId, ManagedWindow>,// fenêtres gérées : Window + 4 tampons de bordure
+    pub unmapped: Vec<PendingWindow>,             // toplevels avant leur commit initial
     pub space: Space<Window>,                     // sorties + suivi entrée/sortie des surfaces
-    pub outputs: Vec<OutputEntry>,                // Output ↔ MonitorId, barre mise en cache
+    pub outputs: Vec<OutputEntry>,                // Output ↔ MonitorId, global wl_output, barre en cache
+    pub orphan_monitor: Option<MonitorId>,        // moniteur conservé quand plus aucun écran n'est branché
     pub seat: Seat<State>, pub pointer_location: Point<f64, Logical>,
     pub cursor_mode: CursorMode,                  // Normal | Move{..} | Resize{..}
+    pub suppressed_keys: HashSet<u32>,            // relâchements à ne pas transmettre
+    pub key_repeat: Option<KeyRepeat>,            // répétition d'un raccourci maintenu
+    pub draw_cursor: bool,                        // le compositeur dessine-t-il le curseur ?
     pub backend: BackendData,                     // données propres au backend actif
     /* états Smithay : compositor, xdg_shell, layer_shell, shm, dmabuf, seat, data_device, … */
 }
 ```
+
+Le backend a parfois besoin en même temps de l'état et de ses propres données (rendu). Il **emprunte** alors `state.backend` (`std::mem::replace` avec `BackendData::None`) le temps de l'opération, puis le remet en place : pas de `RefCell`, pas de verrou.
 
 ### 3.3 Cycle de vie d'un client (xdg-shell)
 
@@ -220,11 +229,13 @@ Puis : focus clavier = surface *layer-shell* exclusive s'il y en a une, sinon cl
 `render::output_elements<R>(state, renderer, output) -> Vec<OutputElement<R>>` construit la liste **de l'avant vers l'arrière** :
 
 ```
-curseur · overlay · plein écran · top · flottants(+bordures) · barre · tuilés(+bordures) · bottom · background
+curseur · overlay · plein écran (sur fond noir) · top · popups · flottants(+bordures) · barre · tuilés(+bordures) · bottom · background
 ```
 
-- `R: Renderer + ImportAll + ImportMem` : même code pour `GlesRenderer` et `PixmanRenderer`.
-- Fenêtres et couches : `render_elements()` de Smithay (popups compris).
+Le test de survol (`State::hit_test`, dans `input.rs`) parcourt exactement le même ordre : ce qui est dessiné au-dessus reçoit le pointeur.
+
+- `R: Renderer + ImportAll + ImportMem` : même code pour `GlesRenderer` (winit), `MultiRenderer` (udev) et `PixmanRenderer` (headless).
+- Surfaces des clients : **rognées** à leur rectangle intérieur alloué (`CropRenderElement`) — un client qui ignore la taille configurée ne déborde pas sur ses voisins. Les popups ne sont pas rognés.
 - Bordures : 4 `SolidColorRenderElement` par client, tracées autour de la géométrie **allouée**.
 - Barre : `MemoryRenderBuffer` par sortie, régénéré seulement si `BarView` change.
 - `OutputDamageTracker::render_output` calcule les dégâts ; après rendu, les rappels de trame (`wl_surface.frame`) sont envoyés aux surfaces visibles.
@@ -234,26 +245,30 @@ curseur · overlay · plein écran · top · flottants(+bordures) · barre · tu
 | | `udev` (natif) | `winit` (imbriqué) | `headless` (tests) |
 |---|---|---|---|
 | Session | libseat | — | — |
-| Sorties | connecteurs DRM (branchement à chaud) | une fenêtre redimensionnable | une sortie virtuelle (taille paramétrable) |
-| Rendu | GLES sur GBM, `GbmBufferedSurface`, page-flip | GLES dans la fenêtre hôte | Pixman, en mémoire, à la demande |
+| Sorties | connecteurs DRM du GPU principal (branchement à chaud), mode préféré | une fenêtre redimensionnable | une ou plusieurs sorties virtuelles, ajout/retrait à chaud par commande |
+| Rendu | GLES sur GBM par `GpuManager` + `DrmOutputManager`, composition sur le plan primaire, page-flip | GLES dans la fenêtre hôte | Pixman, en mémoire, à la demande |
 | Entrées | libinput | événements de la fenêtre | injectées par canal (`HeadlessCommand`) |
-| Curseur | dessiné par le compositeur | curseur de l'hôte | non dessiné |
-| Cadencement | VBlank ; minuterie de repli s'il n'y a pas de dégâts | redessin continu demandé à l'hôte | minuterie 60 Hz (rappels de trame) |
+| Curseur | dessiné par le compositeur | dessiné par le compositeur (celui de l'hôte est masqué) | dessiné sur option (`draw_cursor`) |
+| Cadencement | VBlank ; minuterie de repli s'il n'y a pas de dégâts ; suspendu hors du VT actif | minuterie 60 Hz ; rien n'est présenté sans dégâts | minuterie 60 Hz (rappels de trame) |
 
-Interface commune minimale (`BackendData`) : importer un dmabuf, changer de VT, demander un rendu. Les fonctions d'initialisation (`backend::udev::run`, `backend::winit::run`, `backend::headless::run`) créent la boucle `calloop`, l'état, la sortie, puis exécutent la boucle.
+Interface commune minimale (`BackendData`) : importer un dmabuf, changer de VT. Les fonctions d'initialisation (`backend::udev::run`, `backend::winit::run`, `backend::headless::run`) créent la boucle `calloop`, l'état, les sorties, puis exécutent la boucle. Les sorties sont déclarées par `State::add_output` / `State::remove_output`, communs aux trois backends : le branchement à chaud du backend natif repose donc sur un code exercé par les tests headless.
 
-**Backend headless et tests** : `headless::spawn(opts) -> Handle` démarre le compositeur dans un fil dédié et renvoie un canal de commandes :
+**Backend headless et tests** : `headless::spawn(opts) -> Result<Handle, String>` démarre le compositeur dans un fil dédié et renvoie une poignée (nom de la socket, canal de commandes, méthodes `key_chord`, `click`, `snapshot`, `screenshot`…) :
 
 ```rust
 pub enum HeadlessCommand {
     Action(Action),                               // exécuter une action
     Key { keycode: u32, pressed: bool },          // injecter une touche
     PointerMotion { x: f64, y: f64 }, Button { button: u32, pressed: bool },
+    Status(String),                               // texte de statut
+    AddOutput { width: i32, height: i32 }, RemoveOutput(usize),   // branchement à chaud
     Snapshot(Sender<Wm>),                         // copie du modèle
-    Screenshot(Sender<Screenshot>),               // rendu de la sortie (pixels ARGB)
+    Screenshot { output: usize, reply: Sender<Result<Screenshot, String>> },  // rendu d'une sortie (ARGB)
     Quit,
 }
 ```
+
+`Screenshot::to_png()` encode l'image sans dépendance (PNG non compressé) ; `tools/optimize_png.py` la recompresse.
 
 ### 3.8 Configuration (`config.rs`)
 
@@ -277,7 +292,7 @@ rwdwm [--backend auto|udev|winit|headless] [-s <commande>] [-v] [--version] [--h
 | DA-04 | Composition manuelle des éléments de rendu | `space::render_output` | Ordre d'empilement de dwm (barre entre tuilés et flottants). |
 | DA-05 | Configuration compilée (`config.rs`) | Fichier TOML/KDL à l'exécution | Fidélité à dwm, typage, zéro dépendance. La structure `Config` étant une donnée, un chargeur à l'exécution pourra s'y greffer. |
 | DA-06 | Barre intégrée, police bitmap | Barre externe (dwl) ; FreeType | Identité de dwm sans dépendance de rendu de texte. |
-| DA-07 | `GbmBufferedSurface` | `DrmCompositor` | Simplicité pour la v0.1 ; scanout direct en optimisation ultérieure. |
+| DA-07 | `GpuManager` + `DrmOutputManager`, composition forcée sur le plan primaire (`FrameFlags::empty()`) | `GbmBufferedSurface` + `GlesRenderer` créés à la main | Seul chemin **sans `unsafe`** : `EGLDisplay::new` et `GlesRenderer::new` sont `unsafe`, `GpuManager` les encapsule. Le scanout direct et le plan curseur (`FrameFlags::DEFAULT`) seront activés après validation sur matériel. |
 | DA-08 | Raccourcis de tags sur keycode | Keysyms `1`…`9` | Fonctionne sur AZERTY sans configuration. |
 | DA-09 | Backend headless Pixman + tests en processus | Tests manuels seulement | Vérification de bout en bout sans matériel ; exerce le même code de rendu. |
 | DA-10 | Statut sur stdin | Protocole/IPC dédié | Simplicité, compatibilité avec `slstatus -s` et les scripts dwl. |
@@ -294,6 +309,7 @@ rwdwm [--backend auto|udev|winit|headless] [-s <commande>] [-v] [--version] [--h
 | Niveau | Cible | Moyen |
 |--------|-------|-------|
 | Unitaire | `layout`, `model`, `bar`, `font` | `cargo test -p rwdwm-core` — scénarios dwm, invariants vérifiés après chaque opération. |
-| Intégration | protocoles, focus, raccourcis, configuration des tailles | `cargo test -p rwdwm --features headless` — clients `wayland-client` réels. |
+| Intégration | protocoles, focus, raccourcis, configuration des tailles, branchement à chaud | `cargo test -p rwdwm --no-default-features --features headless` — clients `wayland-client` réels (`tests/integration.rs`, client de test dans `tests/common/`). |
+| Binaire | ligne de commande, démarrage réel en mode headless | `tests/cli.rs`. |
 | Rendu | bordures, barre, empilement | Captures headless, assertions sur les pixels. |
 | Recette | `udev`, `winit` | Liste de contrôle manuelle (document 05). |

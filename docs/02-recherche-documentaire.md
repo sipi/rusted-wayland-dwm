@@ -91,7 +91,7 @@ Sources : dépôt `Smithay/smithay` (étiquette `v0.7.0`, 24/06/2025, et branche
 
 - `KeysymHandle::raw_syms()` / `raw_code()` : symboles de niveau 0 et keycode → raccourcis indépendants de Maj et de la disposition.
 - `Window::render_elements`, `LayerSurface::render_elements` : permettent de composer soi-même l'ordre d'empilement (nécessaire pour insérer la barre entre tuilés et flottants).
-- `GbmBufferedSurface` (échange de tampons simple) *vs* `DrmCompositor` (plans matériels, scanout direct) → le premier est retenu pour la v0.1 (plus simple), le second est une optimisation ultérieure.
+- `GbmBufferedSurface` (échange de tampons simple) *vs* `DrmCompositor` (plans matériels, scanout direct) → le premier semblait le plus simple, mais il oblige à créer soi-même l'affichage EGL et le moteur de rendu par des fonctions `unsafe`. La réalisation a donc retenu `DrmOutputManager` (qui encapsule `DrmCompositor`) avec `GpuManager` : c'est le seul chemin entièrement sûr ; voir la décision DA-07 du document 04.
 - `MemoryRenderBuffer` : importe un tampon ARGB en mémoire → rendu de la barre et du curseur.
 
 ## 5. Protocoles Wayland

@@ -20,7 +20,7 @@ Chaque lot est livrable et vérifiable indépendamment. Les lots L0 à L7 consti
 | Version | Lots |
 |---------|------|
 | **v0.2 — Usage quotidien** | L8 XWayland · L9 verrouillage de session (`ext-session-lock`) et inactivité (`idle-notify`, `idle-inhibit`) · L10 capture d'écran (`wlr-screencopy`) · L11 `wlr-output-management`, échelle fractionnaire, rotation |
-| **v0.3 — Confort** | L12 rendu piloté par les événements + `DrmCompositor` (scanout direct, plan curseur) · L13 contraintes de pointeur, pointeur relatif, gestes · L14 méthodes de saisie (`text-input`, `input-method`) · L15 transactions de redimensionnement (« chaque image est parfaite ») |
+| **v0.3 — Confort** | L12 rendu piloté par les événements, scanout direct et plan curseur (`FrameFlags::DEFAULT`), GPU secondaires, choix du mode vidéo · L13 contraintes de pointeur, pointeur relatif, gestes · L14 méthodes de saisie (`text-input`, `input-method`) · L15 transactions de redimensionnement (« chaque image est parfaite ») |
 | **v0.4 — Ouverture** | L16 IPC (`rwdwm msg …`) et publication d'état pour barres externes · L17 configuration à l'exécution optionnelle · L18 dispositions additionnelles · L19 polices vectorielles |
 
 ## 2. Ordonnancement
@@ -39,19 +39,27 @@ Le backend **headless est développé en premier** dans L7 : il sert de banc d'e
 
 | Lot | Tests automatisés | Vérification complémentaire |
 |-----|-------------------|-----------------------------|
-| L1 | `crates/rwdwm-core/src/{layout,model}.rs` (tests unitaires) | — |
+| L1 | `crates/rwdwm-core/src/{geometry,layout,config,action}.rs`, `src/model/tests.rs` (tests unitaires) | — |
 | L2 | `crates/rwdwm-core/src/{bar,font}.rs` | Inspection visuelle d'une capture |
-| L3, L4, L6 | `crates/rwdwm/tests/integration.rs` | — |
+| L3, L4, L6 | `crates/rwdwm/tests/integration.rs` ; `crates/rwdwm/src/config.rs` (cohérence de la configuration) | — |
 | L5 | `crates/rwdwm/tests/integration.rs` (assertions sur pixels) | Capture `docs/capture-headless.png` |
-| L7 | headless : exercé par tous les tests | `udev`/`winit` : recette manuelle |
+| L7 | headless : exercé par tous les tests, branchement à chaud compris ; `crates/rwdwm/tests/cli.rs` (binaire) | `udev`/`winit` : compilation, puis recette manuelle |
 
 Commandes :
 
 ```sh
 cargo test -p rwdwm-core                                   # noyau
 cargo test -p rwdwm --no-default-features --features headless   # intégration (libxkbcommon + libpixman)
-cargo check --all-features                                 # tous les backends
+cargo check --workspace --all-features                     # tous les backends (vérification de types)
+cargo clippy --workspace --all-features --all-targets      # aucun avertissement
+cargo fmt --all --check
+
+# Capture d'écran sans écran ni GPU (docs/capture-headless.png) :
+cargo run -p rwdwm --no-default-features --features headless --example capture -- docs/capture-headless.png
+python3 tools/optimize_png.py docs/capture-headless.png
 ```
+
+![Capture produite par le backend headless](capture-headless.png)
 
 ## 4. Recette manuelle des backends matériels
 
@@ -69,6 +77,7 @@ cargo check --all-features                                 # tous les backends
 
 **Natif (`udev`)** — depuis un TTY, utilisateur membre d'un siège (seatd ou logind) :
 
+0. Construire avec les bibliothèques système installées (`cargo build --release`) : c'est la **première édition de liens** des backends matériels, jamais faite pendant la réalisation.
 1. `rwdwm -s foot` : affichage sur toutes les sorties connectées.
 2. Mêmes vérifications que ci-dessus, plus : curseur visible, pavé tactile, `Ctrl+Alt+F2` puis retour, branchement/débranchement d'un écran, `MODKEY+,`/`.`.
 3. `slstatus -s | rwdwm` : le statut s'affiche à droite de la barre.
@@ -79,7 +88,7 @@ cargo check --all-features                                 # tous les backends
 |--------|-------------|--------|--------|
 | Backends `udev`/`winit` non exécutés pendant la réalisation | certaine | moyen | Code calqué sur les exemples de référence de Smithay (`anvil`, `smallvil`) ; backends minces ; recette §4 en priorité. |
 | Évolutions d'API de Smithay (pré-1.0) | moyenne | moyen | Version figée (`0.7`, `Cargo.lock`) ; surface d'API concentrée dans `handlers/`, `render.rs`, `backend/`. |
-| Clients ne respectant pas la taille configurée | moyenne | faible | Bordures tracées sur la géométrie allouée ; rognage prévu (L15). |
+| Clients ne respectant pas la taille configurée | moyenne | faible | Bordures tracées sur la géométrie allouée ; surfaces rognées à leur zone. |
 | Absence de XWayland en v0.1 | certaine | moyen | Documentée ; lot L8 prioritaire en v0.2. |
 | Couverture de glyphes limitée de la barre | faible | faible | Remplacement par `?` ; lot L19. |
 

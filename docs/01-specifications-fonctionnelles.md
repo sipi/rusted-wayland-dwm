@@ -43,7 +43,7 @@
 ## 2. Exigences fonctionnelles
 
 Priorités : **M** = indispensable (v0.1), **S** = souhaitable (v0.2+), **C** = envisageable (ultérieur).
-Chaque exigence « M » est couverte par un test automatisé (voir document 05).
+Les exigences « M » qui relèvent de la logique, des protocoles ou du rendu sont couvertes par des tests automatisés (voir document 05). Font exception celles qui exigent du matériel ou une session réelle — EF-SES-04 et EF-SES-06 (exécution native et imbriquée, terminaux virtuels), EF-SOU-06 (pavé tactile), la partie `linux-dmabuf` de EF-PRO-04 — ainsi que les échanges de presse-papiers entre clients (EF-PRO-03), dont seuls les globals sont vérifiés : elles relèvent de la recette manuelle.
 
 ### 2.1 Tags et vues
 
@@ -208,10 +208,11 @@ Du fond vers l'avant, pour chaque moniteur :
 3. clients tuilés (le plus récemment focalisé au-dessus) ;
 4. **barre** ;
 5. clients flottants (le plus récemment focalisé au-dessus) ;
-6. couche `top` ;
-7. client plein écran ;
-8. couche `overlay` ;
-9. curseur.
+6. popups (menus, infobulles) des clients ;
+7. couche `top` ;
+8. client plein écran, sur fond noir : il masque tout ce qui précède ;
+9. couche `overlay` ;
+10. curseur (et icône de glisser-déposer).
 
 ## 4. Exigences non fonctionnelles
 
