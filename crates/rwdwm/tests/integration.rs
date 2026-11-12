@@ -1151,7 +1151,7 @@ fn status_text_is_read_line_by_line() {
     // Un compositeur sans backend suffit : la boucle d'événements est
     // déroulée à la main, le « stdin » est une paire de sockets.
     runtime_dir();
-    let options = rwdwm::backend::Options { config: test_config(), socket: None, startup: None };
+    let options = rwdwm::backend::Options::new(test_config());
     let (mut event_loop, mut data) = rwdwm::backend::create(&options).expect("création du compositeur");
     let (mut writer, reader) = UnixStream::pair().unwrap();
     rwdwm::status::watch(reader, &event_loop.handle());

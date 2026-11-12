@@ -45,11 +45,7 @@ pub struct HeadlessOptions {
 impl HeadlessOptions {
     /// Une sortie 1280×720, configuration donnée, socket automatique.
     pub fn new(config: rwdwm_core::Config) -> Self {
-        HeadlessOptions {
-            common: Options { config, socket: None, startup: None },
-            outputs: vec![(1280, 720)],
-            draw_cursor: false,
-        }
+        HeadlessOptions { common: Options::new(config), outputs: vec![(1280, 720)], draw_cursor: false }
     }
 }
 

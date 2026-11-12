@@ -17,7 +17,7 @@ use smithay::utils::{Physical, Rectangle, Transform};
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 use tracing::{info, warn};
 
-use super::{create, run_loop, BackendData, Error, Options};
+use super::{create, run_loop, BackendData, Error, FrameEvent, FrameStats, Options};
 use crate::render::{color32, output_elements, send_frames, OutputElement};
 use crate::state::{LoopData, State};
 
@@ -26,6 +26,7 @@ pub struct WinitData {
     backend: WinitGraphicsBackend<GlesRenderer>,
     damage_tracker: OutputDamageTracker,
     output: Output,
+    stats: FrameStats,
 }
 
 impl WinitData {
@@ -106,7 +107,12 @@ pub fn run(options: Options) -> Result<(), Error> {
 
     let damage_tracker = OutputDamageTracker::from_output(&output);
     state.add_output(output.clone());
-    state.backend = BackendData::Winit(Box::new(WinitData { backend, damage_tracker, output: output.clone() }));
+    state.backend = BackendData::Winit(Box::new(WinitData {
+        backend,
+        damage_tracker,
+        output: output.clone(),
+        stats: FrameStats::new("winit"),
+    }));
 
     let handle = event_loop.handle();
     handle.insert_source(winit_source, move |event, _, data: &mut LoopData| {
@@ -133,15 +139,20 @@ pub fn run(options: Options) -> Result<(), Error> {
     })?;
 
     crate::status::watch_stdin(&handle);
-    info!("backend winit prêt");
+    info!(largeur = mode.size.w, hauteur = mode.size.h, "backend winit prêt");
     run_loop(event_loop, data, &options)
 }
 
 fn redraw(state: &mut State) {
     // Les données du backend sont empruntées à l'état le temps du rendu.
     let BackendData::Winit(mut winit) = std::mem::replace(&mut state.backend, BackendData::None) else { return };
-    if let Err(err) = winit.render(state) {
-        warn!(%err, "échec du rendu");
+    match winit.render(state) {
+        Ok(true) => winit.stats.record(FrameEvent::Presented),
+        Ok(false) => winit.stats.record(FrameEvent::Idle),
+        Err(err) => {
+            warn!(%err, "échec du rendu");
+            winit.stats.record(FrameEvent::Error);
+        }
     }
     send_frames(state, &winit.output);
     state.backend = BackendData::Winit(winit);

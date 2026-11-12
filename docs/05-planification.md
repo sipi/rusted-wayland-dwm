@@ -65,6 +65,15 @@ python3 tools/optimize_png.py docs/capture-headless.png
 
 À dérouler sur une machine réelle (non exécutable dans l'environnement de réalisation).
 
+**Premier essai : le script de recette.** Il automatise le relevé de l'environnement, la compilation, les tests et un lancement de 45 secondes, borné par `--exit-after` et par un garde-fou :
+
+```sh
+tools/recette.sh > recette.log 2>&1     # depuis une session graphique : backend winit
+tools/recette.sh > recette-tty.log 2>&1 # depuis un terminal virtuel : backend udev
+```
+
+Le fichier produit et les réponses au questionnaire affiché en fin d'essai suffisent à diagnostiquer un échec. Les listes ci-dessous complètent le script une fois ce premier essai réussi.
+
 **Imbriqué (`winit`)** — depuis une session Wayland ou X11 :
 
 1. `cargo run --release -- --backend winit -s foot` : une fenêtre s'ouvre, la barre s'affiche, `foot` occupe la zone utile.

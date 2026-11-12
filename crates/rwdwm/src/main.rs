@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use rwdwm::backend::{self, Options};
 
@@ -18,6 +19,7 @@ Options :
                       winit    : fenêtre dans une session existante ;
                       headless : sortie virtuelle sans affichage (tests).
   -s <commande>     Commande lancée au démarrage (par /bin/sh -c).
+  --exit-after <s>  Arrêt automatique après <s> secondes (essais, recette).
   -v                Journalisation détaillée (ou variable RUST_LOG).
   --version         Affiche la version.
   -h, --help        Affiche cette aide.
@@ -38,6 +40,7 @@ enum Backend {
 struct Cli {
     backend: Backend,
     startup: Option<String>,
+    exit_after: Option<Duration>,
     verbose: bool,
 }
 
@@ -47,7 +50,7 @@ enum Parsed {
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
-    let mut cli = Cli { backend: Backend::Auto, startup: None, verbose: false };
+    let mut cli = Cli { backend: Backend::Auto, startup: None, exit_after: None, verbose: false };
     let mut args = args;
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -66,6 +69,12 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Parsed, String> {
                 }
             }
             "-s" => cli.startup = Some(value("-s")?),
+            "--exit-after" => {
+                let text = value("--exit-after")?;
+                let seconds = text.parse::<f64>().ok().filter(|s| s.is_finite() && *s > 0.0);
+                let seconds = seconds.ok_or(format!("--exit-after : durée invalide : {text}"))?;
+                cli.exit_after = Some(Duration::from_secs_f64(seconds));
+            }
             "-v" => cli.verbose = true,
             "--version" => return Ok(Parsed::Exit(format!("rwdwm {}", env!("CARGO_PKG_VERSION")))),
             "-h" | "--help" => return Ok(Parsed::Exit(USAGE.to_string())),
@@ -85,7 +94,7 @@ fn init_logging(verbose: bool) {
 }
 
 fn run(cli: Cli) -> Result<(), backend::Error> {
-    let options = Options { config: rwdwm::config::config(), socket: None, startup: cli.startup };
+    let options = Options { startup: cli.startup, exit_after: cli.exit_after, ..Options::new(rwdwm::config::config()) };
     let backend = match cli.backend {
         Backend::Auto => {
             let nested = std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
@@ -154,8 +163,8 @@ mod tests {
     fn all_options() {
         let Ok(Parsed::Run(c)) = cli(&["--backend", "headless", "-s", "foot", "-v"]) else { panic!() };
         assert_eq!((c.backend, c.startup.as_deref(), c.verbose), (Backend::Headless, Some("foot"), true));
-        let Ok(Parsed::Run(c)) = cli(&["--backend=winit"]) else { panic!() };
-        assert_eq!(c.backend, Backend::Winit);
+        let Ok(Parsed::Run(c)) = cli(&["--backend=winit", "--exit-after", "1.5"]) else { panic!() };
+        assert_eq!((c.backend, c.exit_after), (Backend::Winit, Some(Duration::from_millis(1500))));
     }
 
     #[test]
@@ -169,6 +178,10 @@ mod tests {
         assert!(cli(&["--backend", "x11"]).is_err());
         assert!(cli(&["--backend"]).is_err());
         assert!(cli(&["-s"]).is_err());
+        assert!(cli(&["--exit-after"]).is_err());
+        assert!(cli(&["--exit-after", "bientôt"]).is_err());
+        assert!(cli(&["--exit-after", "0"]).is_err());
+        assert!(cli(&["--exit-after", "-3"]).is_err());
         assert!(cli(&["--nope"]).is_err());
     }
 }

@@ -35,7 +35,7 @@ fn main() {
     dialog.title = "Ouvrir un fichier".into();
     dialog.fixed_size = Some((360, 220));
     client.create_window_with(dialog);
-    // … et un client sur le tag 3, pour montrer un tag occupé non affiché.
+    // … et un client sur le tag 9 (règle « firefox »), pour montrer un tag occupé non affiché.
     client.create_window("org.mozilla.firefox", 0x88c0d0);
 
     handle.send(HeadlessCommand::Status("rwdwm 0.1 | charge 0.42 | jeu. 12 nov. 14:07".into()));

@@ -38,7 +38,7 @@ use smithay::utils::DeviceFd;
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 use tracing::{debug, error, info, warn};
 
-use super::{create, run_loop, BackendData, Error, Options};
+use super::{create, run_loop, BackendData, Error, FrameEvent, FrameStats, Options};
 use crate::render::{color32, output_elements, send_frames, OutputElement};
 use crate::state::{LoopData, State};
 
@@ -64,6 +64,7 @@ struct Screen {
     output: Output,
     surface: Surface,
     pending: Pending,
+    stats: FrameStats,
 }
 
 struct Device {
@@ -147,6 +148,7 @@ pub fn run(options: Options) -> Result<(), Error> {
     let touchpad = options.config.touchpad;
     handle.insert_source(LibinputInputBackend::new(libinput.clone()), move |mut event, _, data: &mut LoopData| {
         if let InputEvent::DeviceAdded { device } = &mut event {
+            info!(nom = device.name(), "périphérique d'entrée ajouté");
             configure_input_device(device, &touchpad);
         }
         data.state.process_input_event(event);
@@ -418,7 +420,8 @@ fn connector_connected(state: &mut State, node: DrmNode, info: connector::Info, 
                 &DrmOutputRenderElements::default(),
             )
             .map_err(|err| err.to_string())?;
-        device.screens.insert(crtc, Screen { output: output.clone(), surface, pending: Pending::Idle });
+        let stats = FrameStats::new(&name);
+        device.screens.insert(crtc, Screen { output: output.clone(), surface, pending: Pending::Idle, stats });
         device.connectors.insert(info.handle(), crtc);
         Ok(())
     });
@@ -471,7 +474,8 @@ fn render(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
             Ok(result) => !result.is_empty,
             Err(err) => {
                 warn!(%err, "échec du rendu");
-                false
+                screen.stats.record(FrameEvent::Error);
+                return Some((output, false));
             }
         };
         let queued = rendered
@@ -479,11 +483,15 @@ fn render(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
                 Ok(()) => true,
                 Err(err) => {
                     warn!(%err, "échec de la présentation");
-                    false
+                    screen.stats.record(FrameEvent::Error);
+                    return Some((output, false));
                 }
             };
         if queued {
             screen.pending = Pending::WaitingVBlank;
+            screen.stats.record(FrameEvent::Presented);
+        } else {
+            screen.stats.record(FrameEvent::Idle);
         }
         Some((output, queued))
     })
@@ -505,6 +513,7 @@ fn frame_finished(state: &mut State, node: DrmNode, crtc: crtc::Handle) {
         if let Err(err) = screen.surface.frame_submitted() {
             warn!(%err, "acquittement de trame");
         }
+        screen.stats.record(FrameEvent::VBlank);
         screen.pending = Pending::Idle;
         true
     });

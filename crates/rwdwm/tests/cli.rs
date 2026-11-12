@@ -17,18 +17,41 @@ fn version_and_help() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout);
-    for needle in ["--backend", "-s <commande>", "slstatus", "config.rs"] {
+    for needle in ["--backend", "-s <commande>", "--exit-after", "slstatus", "config.rs"] {
         assert!(help.contains(needle), "aide sans « {needle} »");
     }
 }
 
 #[test]
 fn invalid_arguments_exit_with_usage_error() {
-    for args in [&["--backend", "x11"][..], &["--inconnu"], &["-s"]] {
+    for args in [&["--backend", "x11"][..], &["--inconnu"], &["-s"], &["--exit-after", "demain"]] {
         let out = Command::new(BIN).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "arguments {args:?}");
         assert!(String::from_utf8_lossy(&out.stderr).contains("Usage"));
     }
+}
+
+#[test]
+fn exit_after_stops_the_compositor_cleanly() {
+    let dir = common::runtime_dir().join(format!("cli-exit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let started = Instant::now();
+    let output = Command::new(BIN)
+        .args(["--backend", "headless", "--exit-after", "0.3", "-v"])
+        .env("XDG_RUNTIME_DIR", &dir)
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "code de sortie {:?} ; journal :\n{log}", output.status.code());
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(log.contains("--exit-after"), "journal :\n{log}");
+    // Arrêt propre : la socket et son verrou sont retirés.
+    let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(leftovers.is_empty(), "fichiers restants : {leftovers:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -558,6 +558,8 @@ impl State {
 
     /// Exécute une action du noyau, ses effets, puis synchronise.
     pub fn apply_action(&mut self, action: &Action) {
+        // Seules les actions sont journalisées, jamais les touches frappées.
+        debug!(?action, "action");
         let effects = self.wm.apply(action);
         self.run_effects(effects);
         self.sync();

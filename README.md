@@ -6,7 +6,7 @@
 
 *Capture produite sans écran ni GPU par le backend de test (`cargo run --example capture`) ; les fenêtres sont des clients Wayland de démonstration, de couleur unie.*
 
-> **État : v0.1, non éprouvée sur du matériel.** La logique, les protocoles et le rendu sont couverts par 137 tests automatisés, exécutés par un compositeur réel en mode *headless*. Les backends matériels (`udev`, `winit`) **compilent mais n'ont encore jamais été ni liés ni exécutés** : voir [État d'avancement](#état-davancement).
+> **État : v0.1, non éprouvée sur du matériel.** La logique, les protocoles et le rendu sont couverts par 138 tests automatisés, exécutés par un compositeur réel en mode *headless*. Les backends matériels (`udev`, `winit`) **compilent mais n'ont encore jamais été ni liés ni exécutés** : voir [État d'avancement](#état-davancement).
 
 ## Ce que fait rwdwm
 
@@ -45,6 +45,7 @@ rwdwm                           # depuis un terminal virtuel (ou dans une fenêt
 rwdwm -s foot                   # lance une commande au démarrage
 slstatus -s | rwdwm             # texte de statut sur l'entrée standard
 rwdwm --backend winit           # force le mode fenêtre
+rwdwm --exit-after 30 -s foot   # essai sans risque : arrêt automatique après 30 secondes
 rwdwm --help
 ```
 
@@ -99,6 +100,16 @@ Documentation de conception :
 4. [Architecture et spécifications techniques](docs/04-architecture-specifications-techniques.md)
 5. [Planification](docs/05-planification.md)
 
+### Recette sur une vraie machine
+
+Les backends matériels ne peuvent pas être testés automatiquement. Un script fait l'essai et consigne tout ce qui sert au diagnostic :
+
+```sh
+tools/recette.sh > recette.log 2>&1
+```
+
+Il relève l'environnement, compile, lance les tests, puis démarre rwdwm pendant 45 secondes — dans une fenêtre si une session graphique tourne, sur l'écran entier depuis un terminal virtuel — avec deux terminaux et une horloge dans la barre. rwdwm s'arrête de lui-même (`--exit-after`), et un garde-fou le tue s'il ne le fait pas. Les consignes et un court questionnaire s'affichent sur le terminal même quand la sortie est redirigée. `tools/recette.sh --help` liste les étapes (`infos`, `build`, `tests`, `headless`, `winit`, `udev`) et les options.
+
 ## État d'avancement
 
 | Lot | Contenu | État |
@@ -116,7 +127,7 @@ Documentation de conception :
 
 Ce que cela signifie concrètement :
 
-- **Vérifié par exécution** : 86 tests du noyau, 11 tests unitaires du compositeur, 37 tests d'intégration et 3 tests du binaire (137 au total), `clippy` et `rustfmt` sans remarque.
+- **Vérifié par exécution** : 86 tests du noyau, 11 tests unitaires du compositeur, 37 tests d'intégration et 4 tests du binaire (138 au total), `clippy` et `rustfmt` sans remarque.
 - **Vérifié par le compilateur uniquement** : `backend/winit.rs` et `backend/udev.rs` passent `cargo check` et `cargo clippy --all-features`, mais l'environnement de réalisation n'avait ni GPU, ni écran, ni siège, ni les bibliothèques système correspondantes. L'édition de liens d'un binaire complet et la première exécution sur une vraie machine **restent à faire** ; il faut s'attendre à des corrections. La marche à suivre est décrite dans la [recette manuelle](docs/05-planification.md#4-recette-manuelle-des-backends-matériels).
 - **Limites connues du backend natif** : GPU principal seulement, mode vidéo préféré de chaque écran, pas de *direct scan-out* ni de plan curseur matériel, pas de mise à jour des voyants du clavier.
 

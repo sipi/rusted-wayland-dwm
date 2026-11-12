@@ -277,10 +277,12 @@ Fichier Rust unique, structuré comme `config.def.h` : apparence, tags, règles,
 ### 3.9 Ligne de commande
 
 ```
-rwdwm [--backend auto|udev|winit|headless] [-s <commande>] [-v] [--version] [--help]
+rwdwm [--backend auto|udev|winit|headless] [-s <commande>] [--exit-after <s>] [-v] [--version] [--help]
 ```
 
 `auto` : `winit` si `WAYLAND_DISPLAY` ou `DISPLAY` est défini, sinon `udev`. Journalisation via `tracing` (niveau par `-v` ou `RUST_LOG`).
+
+`--exit-after <s>` arrête le compositeur après `<s>` secondes (temporisateur dans la boucle d'événements, code de sortie 0) : garde-fou pour essayer un backend matériel sans risquer de rester devant un écran figé. Les backends matériels journalisent la première image présentée par sortie puis, au niveau `debug`, un bilan toutes les cinq secondes (images présentées, sans changement, erreurs, vblanks) : c'est ce qui permet de diagnostiquer un écran noir à partir du seul journal.
 
 ## 4. Décisions d'architecture
 
@@ -312,4 +314,4 @@ rwdwm [--backend auto|udev|winit|headless] [-s <commande>] [-v] [--version] [--h
 | Intégration | protocoles, focus, raccourcis, configuration des tailles, branchement à chaud | `cargo test -p rwdwm --no-default-features --features headless` — clients `wayland-client` réels (`tests/integration.rs`, client de test dans `tests/common/`). |
 | Binaire | ligne de commande, démarrage réel en mode headless | `tests/cli.rs`. |
 | Rendu | bordures, barre, empilement | Captures headless, assertions sur les pixels. |
-| Recette | `udev`, `winit` | Liste de contrôle manuelle (document 05). |
+| Recette | `udev`, `winit` | Script `tools/recette.sh` et liste de contrôle (document 05). |
