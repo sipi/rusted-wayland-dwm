@@ -25,7 +25,11 @@
 #     -h, --help     cette aide
 #
 # Variables : RECETTE_CARGO_ARGS (arguments supplémentaires pour cargo),
-#             CARGO_TARGET_DIR.
+#             RECETTE_FORCER=1 (compiler même si des bibliothèques semblent
+#             manquer), CARGO_TARGET_DIR.
+#
+# Le script n'installe rien : s'il manque des bibliothèques, il affiche la
+# commande à lancer et s'arrête avant la compilation.
 
 set -u
 
@@ -37,7 +41,7 @@ while [ $# -gt 0 ]; do
         --duree) DUREE="${2:-}"; shift ;;
         --duree=*) DUREE="${1#*=}" ;;
         --sans-tests) AVEC_TESTS=0 ;;
-        -h | --help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h | --help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         auto | infos | build | tests | headless | winit | udev) ETAPE="$1" ;;
         *) echo "recette.sh : argument inconnu : $1" >&2; exit 2 ;;
     esac
@@ -56,6 +60,20 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/rwdwm-recette.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 RESUME=()
+
+# Bibliothèques nécessaires, sous la forme « nom:paquet Debian ».
+# Pour compiler (noms pkg-config) : sondées par pkg-config ou liées par -l.
+DEV_REQUISES="xkbcommon:libxkbcommon-dev pixman-1:libpixman-1-dev libudev:libudev-dev
+    libinput:libinput-dev libseat:libseat-dev gbm:libgbm-dev"
+# Pour s'exécuter : chargées dynamiquement, absentes de la sortie de ldd.
+EXEC_REQUISES="libEGL.so.1:libegl1 libwayland-client.so.0:libwayland-client0 libwayland-egl.so.1:libwayland-egl1"
+# Idem, seulement pour une fenêtre dans une session X11.
+EXEC_X11="libX11.so.6:libx11-6 libX11-xcb.so.1:libx11-xcb1 libxcb.so.1:libxcb1 libXcursor.so.1:libxcursor1
+    libXi.so.6:libxi6 libxkbcommon-x11.so.0:libxkbcommon-x11-0"
+DEPS_VERIFIEES=0
+MANQUE_DEV=()
+MANQUE_EXEC=()
+PAQUETS=()
 # Niveaux de journalisation de rwdwm pendant la recette.
 JOURNAL="${RUST_LOG:-info,rwdwm=debug,smithay=debug}"
 
@@ -104,28 +122,118 @@ essai() {
 
 noter() { RESUME+=("$1"); }
 
+# --------------------------------------------------------------- dépendances
+
+# Liste des bibliothèques connues de l'éditeur de liens dynamique.
+liste_ldconfig() {
+    ldconfig -p 2> /dev/null || /sbin/ldconfig -p 2> /dev/null || /usr/sbin/ldconfig -p 2> /dev/null
+}
+
+# Remplit MANQUE_DEV, MANQUE_EXEC et PAQUETS, et affiche l'état de chaque dépendance.
+verifier_dependances() {
+    local entree nom paquet version connues
+    DEPS_VERIFIEES=1
+    MANQUE_DEV=()
+    MANQUE_EXEC=()
+    PAQUETS=()
+    say "-- outils --"
+    if command -v cc > /dev/null 2>&1; then
+        say "cc               : $(cc --version 2>&1 | head -n 1)"
+    else
+        say "cc               : MANQUANT"
+        MANQUE_DEV+=("cc")
+        PAQUETS+=("build-essential")
+    fi
+    if command -v pkg-config > /dev/null 2>&1; then
+        say "pkg-config       : $(pkg-config --version 2>&1 | head -n 1)"
+    else
+        say "pkg-config       : MANQUANT"
+        MANQUE_DEV+=("pkg-config")
+        PAQUETS+=("pkg-config")
+    fi
+    say ""
+    say "-- bibliothèques nécessaires à la compilation (pkg-config) --"
+    for entree in $DEV_REQUISES; do
+        nom="${entree%%:*}"
+        paquet="${entree#*:}"
+        if version="$(pkg-config --modversion "$nom" 2> /dev/null)"; then
+            printf '%-16s : %s\n' "$nom" "$version"
+        else
+            printf '%-16s : MANQUANTE (paquet Debian : %s)\n' "$nom" "$paquet"
+            MANQUE_DEV+=("$nom")
+            PAQUETS+=("$paquet")
+        fi
+    done
+    say ""
+    say "-- autres bibliothèques (pour information, non nécessaires à la compilation) --"
+    for nom in egl glesv2 libdrm wayland-client wayland-server wayland-egl; do
+        printf '%-16s : %s\n' "$nom" "$(pkg-config --modversion "$nom" 2> /dev/null || echo 'pas de fichier .pc')"
+    done
+    say ""
+    say "-- bibliothèques chargées à l'exécution --"
+    connues="$(liste_ldconfig)"
+    if [ -z "$connues" ]; then
+        say "(ldconfig indisponible : vérification impossible)"
+        return 0
+    fi
+    for entree in $EXEC_REQUISES $EXEC_X11; do
+        nom="${entree%%:*}"
+        paquet="${entree#*:}"
+        if printf '%s\n' "$connues" | grep -q "[[:space:]]$nom "; then
+            printf '%-24s : présente\n' "$nom"
+        else
+            case " $EXEC_X11 " in
+                *"$entree"*)
+                    if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -z "${DISPLAY:-}" ]; then
+                        printf '%-24s : absente (utile seulement sous X11)\n' "$nom"
+                        continue
+                    fi
+                    ;;
+            esac
+            printf '%-24s : MANQUANTE (paquet Debian : %s)\n' "$nom" "$paquet"
+            MANQUE_EXEC+=("$nom")
+            PAQUETS+=("$paquet")
+        fi
+    done
+}
+
+# Dit quoi installer, sur le terminal comme dans le journal.
+conseil_installation() {
+    [ ${#PAQUETS[@]} -gt 0 ] || return 0
+    dire ""
+    if [ ${#MANQUE_DEV[@]} -gt 0 ]; then
+        dire "Il manque de quoi COMPILER : ${MANQUE_DEV[*]}"
+    fi
+    if [ ${#MANQUE_EXEC[@]} -gt 0 ]; then
+        dire "Il manque de quoi EXÉCUTER : ${MANQUE_EXEC[*]}"
+    fi
+    if command -v apt-get > /dev/null 2>&1; then
+        dire "À installer (le script ne le fait pas lui-même) :"
+        dire ""
+        dire "    sudo apt install ${PAQUETS[*]}"
+        dire ""
+    else
+        dire "Installer les paquets de développement correspondants de la distribution"
+        dire "(noms Debian, pour repère : ${PAQUETS[*]})."
+    fi
+    dire "Puis relancer la même commande."
+}
+
 # --------------------------------------------------------------------- infos
 
 etape_infos() {
     titre "1. Environnement"
     say "date             : $(date '+%Y-%m-%d %H:%M:%S %z')"
-    say "commit           : $(git rev-parse HEAD 2> /dev/null || echo inconnu) ($(git status --short 2> /dev/null | wc -l) fichier(s) modifié(s))"
+    say "commit           : $(git rev-parse HEAD 2> /dev/null || echo inconnu)"
+    say "fichiers modifiés: $(git status --short 2> /dev/null | tr '\n' ';')"
     say "noyau            : $(uname -srmo)"
     if [ -r /etc/os-release ]; then
         say "distribution     : $(. /etc/os-release && echo "${PRETTY_NAME:-$NAME}")"
     fi
     say "rustc            : $(rustc --version 2>&1)"
     say "cargo            : $(cargo --version 2>&1)"
-    say "cc               : $(cc --version 2>&1 | head -n 1)"
     say ""
-    say "-- bibliothèques (pkg-config) --"
-    if command -v pkg-config > /dev/null 2>&1; then
-        for lib in xkbcommon pixman-1 libudev libinput libseat gbm egl glesv2 wayland-client wayland-egl libdrm; do
-            printf '%-16s : %s\n' "$lib" "$(pkg-config --modversion "$lib" 2>&1 | head -n 1)"
-        done
-    else
-        say "pkg-config ABSENT (nécessaire à la compilation)"
-    fi
+    verifier_dependances
     say ""
     say "-- session --"
     for var in XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR XDG_SEAT XDG_VTNR XDG_SESSION_ID \
@@ -157,28 +265,54 @@ etape_infos() {
 
 # --------------------------------------------------------------------- build
 
+# Lance cargo build --release avec les arguments donnés ; la sortie est
+# aussi gardée dans $WORK/build.log.
+construire() {
+    local debut fin code
+    say "\$ cargo build --release $* ${CARGO_ARGS[*]}"
+    debut=$(date +%s)
+    cargo build --release "$@" "${CARGO_ARGS[@]}" 2>&1 | tee "$WORK/build.log"
+    code=${PIPESTATUS[0]}
+    fin=$(date +%s)
+    say "-> code de sortie $code ($((fin - debut)) s)"
+    return "$code"
+}
+
 etape_build() {
+    local reussi
     titre "2. Compilation (cargo build --release)"
     if ! command -v cargo > /dev/null 2>&1; then
         say "cargo est introuvable : installer Rust (https://rustup.rs)."
         noter "compilation : ÉCHEC (cargo absent)"
         return 1
     fi
+    [ "$DEPS_VERIFIEES" = 1 ] || verifier_dependances
+    if [ ${#MANQUE_DEV[@]} -gt 0 ] && [ -z "${RECETTE_FORCER:-}" ]; then
+        say "Compilation non tentée : il manque ${MANQUE_DEV[*]}."
+        say "(RECETTE_FORCER=1 pour compiler malgré tout.)"
+        noter "compilation : NON TENTÉE (il manque : ${MANQUE_DEV[*]})"
+        return 1
+    fi
     VERROU=(--locked)
-    if run cargo build --release --locked "${CARGO_ARGS[@]}"; then
+    if construire --locked; then
         noter "compilation : OK (Cargo.lock respecté)"
-    else
+    elif grep -q 'lock file' "$WORK/build.log"; then
+        # Seul cas où un second essai a un sens : Cargo.lock n'est pas à jour.
         say ""
-        say "Échec avec --locked ; nouvel essai en laissant cargo ajuster Cargo.lock."
+        say "Cargo.lock n'est pas à jour ; nouvel essai en laissant cargo le compléter."
         VERROU=()
-        if run cargo build --release "${CARGO_ARGS[@]}"; then
-            noter "compilation : OK, mais SANS --locked (Cargo.lock a dû être modifié)"
-            say "-- différences de Cargo.lock --"
-            git --no-pager diff --stat -- Cargo.lock 2>&1 | sed 's/^/    /'
-        else
-            noter "compilation : ÉCHEC"
+        construire
+        reussi=$?
+        say "-- différences de Cargo.lock --"
+        git --no-pager diff --stat -- Cargo.lock 2>&1 | sed 's/^/    /'
+        if [ "$reussi" != 0 ]; then
+            noter "compilation : ÉCHEC (et Cargo.lock n'était pas à jour)"
             return 1
         fi
+        noter "compilation : OK, mais SANS --locked (Cargo.lock a été modifié par cargo)"
+    else
+        noter "compilation : ÉCHEC"
+        return 1
     fi
     say ""
     run ls -l "$BIN"
@@ -413,6 +547,7 @@ etape_reelle_auto() {
 resume() {
     titre "Résumé"
     for ligne in "${RESUME[@]}"; do dire "  - $ligne"; done
+    conseil_installation
     dire ""
     dire "Renvoyer le fichier produit en entier, avec les réponses au questionnaire."
 }

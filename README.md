@@ -22,13 +22,15 @@ Hors périmètre de la v0.1 : XWayland, verrouillage de session, capture d'écra
 
 ## Compiler
 
-Rust 1.88 ou plus récent. Bibliothèques système (noms Debian/Ubuntu, donnés à titre indicatif : cette liste n'a pas pu être vérifiée dans l'environnement de réalisation) :
+Rust 1.88 ou plus récent, un compilateur C, `pkg-config` et six bibliothèques de développement (noms Debian/Ubuntu) :
 
 ```sh
-sudo apt install pkg-config libxkbcommon-dev libpixman-1-dev \
-    libudev-dev libinput-dev libseat-dev libgbm-dev libegl1-mesa-dev libwayland-dev
+sudo apt install build-essential pkg-config libxkbcommon-dev libpixman-1-dev \
+    libudev-dev libinput-dev libseat-dev libgbm-dev
 cargo build --release          # target/release/rwdwm
 ```
+
+Cette liste est établie d'après les scripts de construction des dépendances ; elle n'a pas encore été confirmée par une compilation complète sur une machine réelle. À l'exécution, rwdwm charge en plus dynamiquement `libEGL`, et, pour le mode fenêtre, `libwayland-client`/`libwayland-egl` (hôte Wayland) ou `libX11`, `libX11-xcb`, `libXcursor`, `libXi` et `libxkbcommon-x11` (hôte X11) : une session graphique les fournit normalement. `tools/recette.sh infos` dit ce qui manque et affiche la commande d'installation.
 
 Backends, sélectionnables par *features* Cargo (toutes actives par défaut) :
 
