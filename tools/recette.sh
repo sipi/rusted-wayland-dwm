@@ -521,7 +521,12 @@ questionnaire() {
     dire " Q4. Le curseur de la souris était-il visible et suivait-il la souris ?"
     dire " Q5. Le clavier écrivait-il dans le terminal survolé ?"
     dire " Q6. Alt+j / Alt+k déplaçaient-ils la bordure bleue d'un terminal à l'autre ?"
-    dire " Q7. Alt+Maj+Entrée ouvrait-il un terminal (si foot est installé) ?"
+    if command -v foot > /dev/null 2>&1; then
+        dire " Q7. Alt+Maj+Entrée ouvrait-il un terminal (foot) ?"
+    else
+        dire " Q7. Sans objet : Alt+Maj+Entrée lance foot, qui n'est pas installé"
+        dire "     (« sudo apt install foot », ou changer TERMINAL dans crates/rwdwm/src/config.rs)."
+    fi
     dire " Q8. Alt+2 vidait-il l'écran, et Alt+1 ramenait-il les terminaux ?"
     dire " Q9. rwdwm s'est-il fermé tout seul, en rendant un écran et un clavier utilisables ?"
     dire " Q10. Autre chose d'anormal (écran noir, image figée, scintillement, couleurs) ?"

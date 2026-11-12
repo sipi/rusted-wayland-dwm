@@ -132,7 +132,15 @@ pub fn run(options: Options) -> Result<(), Error> {
         let state = &mut data.state;
         match event {
             WinitEvent::Resized { size, .. } => {
-                output.change_current_state(Some(Mode { size, refresh: 60_000 }), None, None, None);
+                // Une fenêtre n'a qu'un mode, sa taille du moment : l'ancien
+                // n'est plus annoncé aux clients.
+                let mode = Mode { size, refresh: 60_000 };
+                let previous = output.current_mode();
+                output.change_current_state(Some(mode), None, None, None);
+                output.set_preferred(mode);
+                if let Some(previous) = previous.filter(|previous| *previous != mode) {
+                    output.delete_mode(previous);
+                }
                 state.output_changed(&output);
             }
             WinitEvent::Input(event) => state.process_input_event(event),
