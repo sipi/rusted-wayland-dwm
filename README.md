@@ -110,7 +110,7 @@ Les backends matériels ne peuvent pas être testés automatiquement. Un script 
 tools/recette.sh > recette.log 2>&1
 ```
 
-Il relève l'environnement, compile, lance les tests, puis démarre rwdwm pendant 45 secondes — dans une fenêtre si une session graphique tourne, sur l'écran entier depuis un terminal virtuel — avec deux terminaux et une horloge dans la barre. rwdwm s'arrête de lui-même (`--exit-after`), et un garde-fou le tue s'il ne le fait pas. Les consignes et un court questionnaire s'affichent sur le terminal même quand la sortie est redirigée. `tools/recette.sh --help` liste les étapes (`infos`, `build`, `tests`, `headless`, `winit`, `udev`) et les options.
+Il relève l'environnement, compile, lance les tests, puis démarre rwdwm pendant 45 secondes — dans une fenêtre si une session graphique tourne, sur l'écran entier depuis un terminal virtuel — avec deux terminaux et une horloge dans la barre. Les messages du premier terminal et le début de ses échanges Wayland avec rwdwm sont recopiés dans le journal ; s'il s'arrête aussitôt, le terminal installé suivant est essayé (`RECETTE_TERMINAL=kitty` impose un terminal). rwdwm s'arrête de lui-même (`--exit-after`), et un garde-fou le tue s'il ne le fait pas. Les consignes et un court questionnaire s'affichent sur le terminal même quand la sortie est redirigée. `tools/recette.sh --help` liste les étapes (`infos`, `build`, `tests`, `headless`, `winit`, `udev`) et les options.
 
 ## État d'avancement
 

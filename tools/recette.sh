@@ -26,7 +26,8 @@
 #
 # Variables : RECETTE_CARGO_ARGS (arguments supplémentaires pour cargo),
 #             RECETTE_FORCER=1 (compiler même si des bibliothèques semblent
-#             manquer), CARGO_TARGET_DIR.
+#             manquer), RECETTE_TERMINAL (terminal à ouvrir dans la session,
+#             au lieu du premier installé), CARGO_TARGET_DIR.
 #
 # Le script n'installe rien : s'il manque des bibliothèques, il affiche la
 # commande à lancer et s'arrête avant la compilation.
@@ -41,7 +42,7 @@ while [ $# -gt 0 ]; do
         --duree) DUREE="${2:-}"; shift ;;
         --duree=*) DUREE="${1#*=}" ;;
         --sans-tests) AVEC_TESTS=0 ;;
-        -h | --help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h | --help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         auto | infos | build | tests | headless | winit | udev) ETAPE="$1" ;;
         *) echo "recette.sh : argument inconnu : $1" >&2; exit 2 ;;
     esac
@@ -341,7 +342,10 @@ etape_tests() {
 # ------------------------------------------------------- script de la session
 
 # Programme lancé par rwdwm au démarrage (option -s) : il s'exécute DANS la
-# session rwdwm, y relève ce qu'il voit et y ouvre deux terminaux.
+# session rwdwm, y relève ce qu'il voit et y ouvre deux terminaux. Le premier
+# est lancé avec WAYLAND_DEBUG=1 : ses messages et le début de ses échanges
+# avec rwdwm sont recopiés dans le journal. S'il s'arrête avant trois
+# secondes, le terminal installé suivant est essayé.
 ecrire_session() {
     cat > "$WORK/session.sh" << 'EOF'
 #!/bin/sh
@@ -359,26 +363,92 @@ fi
 
 # Les applications ne doivent pas pouvoir se rabattre sur la session hôte.
 unset DISPLAY
-term=""
-for candidate in foot alacritty kitty wezterm weston-terminal; do
-    if command -v "$candidate" > /dev/null 2>&1; then term="$candidate"; break; fi
+work=$(dirname "$0")
+candidats=""
+for candidat in ${RECETTE_TERMINAL:-foot alacritty kitty wezterm weston-terminal}; do
+    if command -v "$candidat" > /dev/null 2>&1; then candidats="$candidats $candidat"; fi
 done
-if [ -z "$term" ]; then
+if [ -z "$candidats" ]; then
     log "AUCUN TERMINAL WAYLAND TROUVÉ (foot, alacritty, kitty, wezterm, weston-terminal) : l'écran restera vide sous la barre"
     exit 0
 fi
-etat() { if kill -0 "$1" 2> /dev/null; then echo "en cours"; else wait "$1"; echo "TERMINÉ, code $?"; fi; }
+log "terminaux installés :$candidats"
+
+# Lance un terminal en arrière-plan. Sa sortie va dans $work/<nom>.log et son
+# code de retour dans $work/<nom>.code.
+#   $1 : terminal ; $2 : nom ; $3 : « trace » pour relever les échanges Wayland
+lancer() {
+    rm -f "$work/$2.code" "$work/$2.log"
+    (
+        if [ "$3" = trace ]; then
+            WAYLAND_DEBUG=1
+            export WAYLAND_DEBUG
+        fi
+        "$1" > "$work/$2.log" 2>&1
+        echo $? > "$work/$2.code"
+    ) &
+}
+etat() {
+    if [ -s "$work/$1.code" ]; then echo "TERMINÉ, code $(cat "$work/$1.code")"; else echo "en cours"; fi
+}
+# Les lignes de la trace WAYLAND_DEBUG commencent par « [horodatage] ».
+trace='^\[ *[0-9]*\.[0-9]*\]'
+# Ce que le terminal a écrit lui-même (erreurs, avertissements).
+messages() {
+    if [ -f "$work/$1.log" ] && grep -v "$trace" "$work/$1.log" | grep -q .; then
+        log "$1, messages du terminal :"
+        grep -v "$trace" "$work/$1.log" | head -n 60 | sed "s/^/[$1] /"
+    else
+        log "$1 : le terminal n'a rien écrit"
+    fi
+}
+# Début des échanges Wayland : c'est là que se lit un refus du compositeur.
+debut_trace() {
+    [ -f "$work/$1.log" ] || return 0
+    log "$1, échanges Wayland ($(grep -c "$trace" "$work/$1.log") lignes relevées), début :"
+    grep "$trace" "$work/$1.log" | head -n 220 | sed "s/^/[$1] /"
+}
+fin_trace() {
+    [ -f "$work/$1.log" ] || return 0
+    log "$1, échanges Wayland, fin :"
+    grep "$trace" "$work/$1.log" | tail -n 30 | sed "s/^/[$1] /"
+}
+
+# Premier terminal : le premier candidat qui tient trois secondes.
+term=""
+essai=0
+for candidat in $candidats; do
+    essai=$((essai + 1))
+    nom="essai$essai-$candidat"
+    log "lancement de $candidat ($nom), échanges Wayland relevés"
+    lancer "$candidat" "$nom" trace
+    sleep 3
+    log "$nom : $(etat "$nom")"
+    messages "$nom"
+    debut_trace "$nom"
+    if [ ! -s "$work/$nom.code" ]; then
+        term="$candidat"
+        premier="$nom"
+        break
+    fi
+    log "$candidat S'EST ARRÊTÉ AVANT TROIS SECONDES : terminal suivant"
+done
+if [ -z "$term" ]; then
+    log "AUCUN TERMINAL N'A TENU TROIS SECONDES : l'écran restera vide sous la barre"
+    exit 0
+fi
 log "terminal retenu : $term"
-"$term" &
-t1=$!
+
+second="second-$term"
+lancer "$term" "$second"
 sleep 3
-log "terminal 1 (pid $t1) : $(etat $t1)"
-"$term" &
-t2=$!
-sleep 3
-log "terminal 1 (pid $t1) : $(etat $t1)"
-log "terminal 2 (pid $t2) : $(etat $t2)"
+log "$premier : $(etat "$premier")"
+log "$second : $(etat "$second")"
 wait
+log "$premier : $(etat "$premier")"
+log "$second : $(etat "$second")"
+fin_trace "$premier"
+messages "$second"
 log "terminée"
 EOF
     chmod +x "$WORK/session.sh"

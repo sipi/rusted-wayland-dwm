@@ -297,6 +297,17 @@ impl Client {
         window.toplevel.destroy();
         window.xdg_surface.destroy();
         window.surface.destroy();
+        // Une surface détruite n'a plus le focus. Le compositeur envoie bien
+        // `leave`, mais l'événement désigne un objet que le client vient de
+        // détruire : selon l'implémentation cliente (libwayland ou Rust pur),
+        // il est remis ou écarté. Le client de test n'en dépend donc pas.
+        let surface = window.surface.clone();
+        if self.state.keyboard_focus.as_ref() == Some(&surface) {
+            self.state.keyboard_focus = None;
+        }
+        if self.state.pointer_focus.as_ref() == Some(&surface) {
+            self.state.pointer_focus = None;
+        }
         self.settle();
     }
 

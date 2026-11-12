@@ -15,6 +15,7 @@ use smithay::wayland::shell::wlr_layer::LayerSurfaceData;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{delegate_compositor, delegate_shm};
+use tracing::debug;
 
 use crate::state::{ClientState, PendingWindow, State};
 
@@ -87,6 +88,9 @@ impl State {
         if has_buffer {
             let first = !managed.mapped;
             managed.mapped = true;
+            if first {
+                debug!(id, "premier tampon : le client devient affichable");
+            }
             let geo = managed.window.geometry();
             let (min, max) = with_states(surface, |states| {
                 let mut guard = states.cached_state.get::<SurfaceCachedState>();
@@ -103,6 +107,7 @@ impl State {
         } else if managed.mapped {
             // Tampon nul : le client se démappe. Il redevient un toplevel
             // « neuf », qui devra refaire son commit initial.
+            debug!(id, "tampon nul : le client se démappe");
             if let Some(managed) = self.unmanage_window(id) {
                 if let Some(toplevel) = managed.window.toplevel() {
                     toplevel.reset_initial_configure_sent();

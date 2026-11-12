@@ -70,7 +70,15 @@ pub struct ClientState {
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: WlClientId) {}
-    fn disconnected(&self, _client_id: WlClientId, _reason: DisconnectReason) {}
+    fn disconnected(&self, client_id: WlClientId, reason: DisconnectReason) {
+        // Une erreur de protocole explique à elle seule qu'une application
+        // disparaisse : elle doit être visible sans journalisation détaillée.
+        if matches!(reason, DisconnectReason::ProtocolError(_)) {
+            warn!(?client_id, ?reason, "client déconnecté pour erreur de protocole");
+        } else {
+            debug!(?client_id, ?reason, "client déconnecté");
+        }
+    }
 }
 
 /// Fenêtre gérée : la fenêtre Smithay et ses ressources de rendu.
@@ -532,6 +540,7 @@ impl State {
             self.wm.set_fullscreen(id, true);
         }
         let borders = std::array::from_fn(|_| SolidColorBuffer::default());
+        debug!(id, "client pris en charge, en attente de son premier tampon");
         self.windows.insert(id, ManagedWindow { window, borders, mapped: false });
         self.sync();
         if !toplevel.is_initial_configure_sent() {
@@ -542,6 +551,7 @@ impl State {
     /// Cesse de gérer un client (fenêtre détruite ou démappée).
     pub fn unmanage_window(&mut self, id: ClientId) -> Option<ManagedWindow> {
         let managed = self.windows.remove(&id)?;
+        debug!(id, "client retiré");
         self.space.unmap_elem(&managed.window);
         self.wm.unmanage(id);
         if matches!(self.cursor_mode, CursorMode::Move { client, .. } | CursorMode::Resize { client, .. } if client == id)

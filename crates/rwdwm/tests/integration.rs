@@ -814,6 +814,7 @@ fn unmap_remap_and_destroy() {
     client.destroy_window(b);
     let wm = sync(&handle, &mut client);
     assert_eq!(wm.client_ids().count(), 0);
+    assert_eq!(wm.selected(), None);
     assert_eq!(client.focused_window(), None);
     assert_eq!(handle.screenshot(0).count(Rect::new(0, 18, 1280, 702), ROOT), 1280 * 702);
 }

@@ -27,18 +27,28 @@ pub struct WinitData {
     damage_tracker: OutputDamageTracker,
     output: Output,
     stats: FrameStats,
+    /// La surface EGL de la fenêtre n'est peut-être plus courante : avant la
+    /// première image, ou depuis qu'un import de texture ou de dmabuf a
+    /// utilisé le contexte sans elle.
+    surface_stale: bool,
 }
 
 impl WinitData {
     /// Importe un dmabuf dans le moteur de rendu.
     pub fn import_dmabuf(&mut self, dmabuf: &Dmabuf) -> bool {
+        self.surface_stale = true;
         self.backend.renderer().import_dmabuf(dmabuf, None).is_ok()
     }
 
     /// Compose et présente une image. Renvoie `false` si rien n'a changé.
     fn render(&mut self, state: &mut State) -> Result<bool, Error> {
         let clear = color32(Color(state.wm.config().colors.root.0));
-        let age = self.backend.buffer_age().unwrap_or(0);
+        // L'âge du tampon ne se lit que si la surface EGL est courante (sinon
+        // EGL signale BAD_SURFACE). Quand elle ne l'est plus, tout est redessiné.
+        let age = if self.surface_stale { 0 } else { self.backend.buffer_age().unwrap_or(0) };
+        // Construire les éléments importe des textures, ce qui détache la
+        // surface du contexte ; seul un rendu effectif la rend de nouveau courante.
+        self.surface_stale = true;
         let damage: Option<Vec<Rectangle<i32, Physical>>> = {
             let (renderer, mut framebuffer) = self.backend.bind()?;
             let elements: Vec<OutputElement<GlesRenderer>> = output_elements(state, renderer, &self.output);
@@ -50,6 +60,8 @@ impl WinitData {
         };
         match damage {
             Some(damage) => {
+                // Le rendu vient de rendre la surface courante.
+                self.surface_stale = false;
                 self.backend.submit(Some(&damage))?;
                 Ok(true)
             }
@@ -112,6 +124,7 @@ pub fn run(options: Options) -> Result<(), Error> {
         damage_tracker,
         output: output.clone(),
         stats: FrameStats::new("winit"),
+        surface_stale: true,
     }));
 
     let handle = event_loop.handle();
