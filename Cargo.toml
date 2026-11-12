@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/rwdwm-core", "crates/rwdwm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/sipi/rusted-wayland-dwm"
+authors = ["rusted-wayland-dwm contributors"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

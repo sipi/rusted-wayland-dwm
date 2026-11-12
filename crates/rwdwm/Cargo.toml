@@ -1,0 +1,59 @@
+[package]
+name = "rwdwm"
+description = "Clone de dwm pour Wayland, écrit en Rust avec Smithay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rwdwm"
+path = "src/main.rs"
+
+[[test]]
+name = "integration"
+required-features = ["headless"]
+
+[[test]]
+name = "cli"
+required-features = ["headless"]
+
+[[example]]
+name = "capture"
+required-features = ["headless"]
+
+[features]
+default = ["udev", "winit", "headless"]
+# Backend de test : sortie virtuelle, rendu logiciel Pixman, entrées injectées.
+headless = ["smithay/renderer_pixman"]
+# Backend imbriqué : une fenêtre dans une session Wayland ou X11 existante.
+winit = ["smithay/backend_winit", "smithay/backend_egl", "smithay/renderer_gl"]
+# Backend natif : DRM/KMS, libinput, libseat.
+udev = [
+    "smithay/backend_udev",
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_egl",
+    "smithay/backend_libinput",
+    "smithay/backend_session_libseat",
+    "smithay/renderer_gl",
+    "smithay/renderer_multi",
+]
+
+[dependencies]
+rwdwm-core = { path = "../rwdwm-core", version = "0.1.0" }
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "desktop"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "env-filter"] }
+xcursor = "0.3"
+
+[dev-dependencies]
+# Clients Wayland réels pour les tests d'intégration et l'exemple de capture.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
